@@ -1,126 +1,108 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { computeStats, useHerbarium } from "./store";
+import { RegisterForm } from "./components/RegisterForm";
+import { QueueView } from "./components/QueueView";
+import { SpecimenDetail } from "./components/SpecimenDetail";
 
-const project = {
-  "sourceNo": 9,
-  "id": "hxyfront-62007",
-  "port": 62007,
-  "title": "植物标本馆入库",
-  "domain": "植物标本馆",
-  "prompt": "开发一个植物标本馆压制标本入库前端项目，工作人员可以录入采集号、物种名称、采集地点、海拔、生境描述、采集人、压制状态、鉴定状态和馆藏位置。页面需要有入库队列、鉴定状态筛选、采集地点信息卡、馆藏柜位记录和单份标本详情页。",
-  "palette": [
-    "#166534",
-    "#0f766e",
-    "#ca8a04"
-  ],
-  "metrics": [
-    "入库队列",
-    "待鉴定",
-    "已上柜",
-    "采集点"
-  ],
-  "filters": [
-    "待压制",
-    "待鉴定",
-    "已入库",
-    "需补照"
-  ],
-  "fields": [
-    "采集号",
-    "物种名称",
-    "采集地点",
-    "海拔",
-    "生境描述",
-    "馆藏位置"
-  ],
-  "records": [
-    [
-      "HX-240615-01",
-      "槭属待定",
-      "海拔1420m",
-      "待鉴定"
-    ],
-    [
-      "HX-240615-08",
-      "蕨类",
-      "阴湿沟谷",
-      "已压制"
-    ],
-    [
-      "HX-240616-03",
-      "菊科",
-      "柜位B-12-04",
-      "已入库"
-    ]
-  ]
-};
+type View = "queue" | "register";
 
 function App() {
+  const { state, dispatch } = useHerbarium();
+  const [view, setView] = useState<View>("queue");
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const stats = useMemo(() => computeStats(state), [state]);
+
+  const counts = useMemo(
+    () => ({
+      all: state.specimens.length,
+      pending: state.specimens.filter((s) => s.idStatus === "pending").length,
+      confirmed: state.specimens.filter((s) => s.idStatus === "confirmed").length,
+      shelved: state.specimens.filter((s) => s.shelved).length,
+      unshelved: state.specimens.filter((s) => !s.shelved).length,
+      review: state.specimens.filter((s) => (s.pendingReview?.length ?? 0) > 0).length,
+    }),
+    [state.specimens]
+  );
+
+  function reset() {
+    if (window.confirm("确定清空本机数据并恢复示例数据？此操作不可撤销。")) {
+      dispatch({ type: "resetAll" });
+      setOpenId(null);
+      setView("queue");
+    }
+  }
+
+  const metricCards = [
+    { label: "入库队列", value: stats.total },
+    { label: "待鉴定", value: stats.pendingId },
+    { label: "已上柜", value: stats.shelved },
+    { label: "待复核", value: stats.review, alert: stats.review > 0 },
+    { label: "采集事件", value: stats.events },
+  ];
+
   return (
     <main className="app">
-      <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
-      </section>
+      <header className="topbar">
+        <div className="brand">
+          <h1>植物标本馆入库</h1>
+          <p>以「采集事件」为单位登记同场标本 · 数据保存在本机浏览器</p>
+        </div>
+        <nav className="tabs">
+          <button className={view === "queue" ? "tab-on" : ""} onClick={() => setView("queue")}>
+            入库队列
+          </button>
+          <button
+            className={view === "register" ? "tab-on" : ""}
+            onClick={() => setView("register")}
+          >
+            登记标本
+          </button>
+          <button className="ghost" onClick={reset} title="清空并恢复示例数据">
+            重置数据
+          </button>
+        </nav>
+      </header>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[86, 14, 7, 32][index] ?? 12}</strong>
+        {metricCards.map((m) => (
+          <article key={m.label} className={m.alert ? "metric-alert" : ""}>
+            <small>{m.label}</small>
+            <strong>{m.value}</strong>
           </article>
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}筛选</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
+      {openId ? (
+        <SpecimenDetail
+          key={openId}
+          state={state}
+          dispatch={dispatch}
+          specimenId={openId}
+          onOpenSpecimen={(id) => setOpenId(id)}
+          onBack={() => setOpenId(null)}
+        />
+      ) : view === "queue" ? (
+        <QueueView
+          specimens={state.specimens}
+          events={state.events}
+          counts={counts}
+          onOpen={(id) => setOpenId(id)}
+        />
+      ) : (
+        <RegisterForm
+          state={state}
+          dispatch={dispatch}
+          onCreated={() => {
+            setView("queue");
+          }}
+        />
+      )}
 
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存草稿</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>历史记录</p>
-            <h2>近期工作台</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <footer className="foot">
+        所有记录仅保存在本机（localStorage），关闭重开后仍可继续处理。
+      </footer>
     </main>
   );
 }
