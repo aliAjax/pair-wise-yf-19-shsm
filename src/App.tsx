@@ -1,128 +1,156 @@
+import { useCallback, useEffect, useState } from "react";
+import type { Database } from "./types";
+import { loadDB, resetDB, saveDB } from "./store";
+import * as ops from "./ops";
+import RegisterPanel from "./RegisterPanel";
+import QueuePanel from "./QueuePanel";
+import EventsPanel from "./EventsPanel";
+import DetailView from "./DetailView";
 import "./styles.css";
 
-const project = {
-  "sourceNo": 9,
-  "id": "hxyfront-62007",
-  "port": 62007,
-  "title": "植物标本馆入库",
-  "domain": "植物标本馆",
-  "prompt": "开发一个植物标本馆压制标本入库前端项目，工作人员可以录入采集号、物种名称、采集地点、海拔、生境描述、采集人、压制状态、鉴定状态和馆藏位置。页面需要有入库队列、鉴定状态筛选、采集地点信息卡、馆藏柜位记录和单份标本详情页。",
-  "palette": [
-    "#166534",
-    "#0f766e",
-    "#ca8a04"
-  ],
-  "metrics": [
-    "入库队列",
-    "待鉴定",
-    "已上柜",
-    "采集点"
-  ],
-  "filters": [
-    "待压制",
-    "待鉴定",
-    "已入库",
-    "需补照"
-  ],
-  "fields": [
-    "采集号",
-    "物种名称",
-    "采集地点",
-    "海拔",
-    "生境描述",
-    "馆藏位置"
-  ],
-  "records": [
-    [
-      "HX-240615-01",
-      "槭属待定",
-      "海拔1420m",
-      "待鉴定"
-    ],
-    [
-      "HX-240615-08",
-      "蕨类",
-      "阴湿沟谷",
-      "已压制"
-    ],
-    [
-      "HX-240616-03",
-      "菊科",
-      "柜位B-12-04",
-      "已入库"
-    ]
-  ]
-};
+type View = { name: "home" } | { name: "detail"; specimenId: string };
 
-function App() {
+export default function App() {
+  const [db, setDb] = useState<Database>(loadDB);
+  const [view, setView] = useState<View>({ name: "home" });
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+
+  // 每次变更即写入本机存储，重开页面可继续处理
+  useEffect(() => {
+    saveDB(db);
+  }, [db]);
+
+  const notify = useCallback((messages: string[]) => {
+    const items = messages.map((text) => ({ id: Date.now() + Math.random(), text }));
+    setToasts((prev) => [...prev, ...items]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => !items.some((i) => i.id === t.id)));
+    }, 4200);
+  }, []);
+
+  const apply = useCallback(
+    (result: ops.OpResult): string | undefined => {
+      if (result.error) return result.error;
+      setDb(result.db);
+      notify(result.messages);
+      return undefined;
+    },
+    [notify]
+  );
+
+  const openDetail = (specimenId: string) => {
+    setView({ name: "detail", specimenId });
+    window.scrollTo({ top: 0 });
+  };
+
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `herbarium-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const reset = () => {
+    if (window.confirm("确定清空本机数据并恢复演示数据吗？")) {
+      setDb(resetDB());
+      setView({ name: "home" });
+      notify(["已重置为演示数据"]);
+    }
+  };
+
+  const metrics = {
+    queue: db.specimens.length,
+    unidentified: db.specimens.filter((s) => s.idStatus === "unidentified").length,
+    shelved: db.specimens.filter((s) => s.shelfStatus === "shelved").length,
+    review: db.specimens.filter((s) => s.review === "pending").length,
+    events: db.events.length,
+  };
+
   return (
     <main className="app">
-      <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
-      </section>
+      <header className="hero">
+        <p>植物标本馆 · 压制标本入库</p>
+        <h1>采集事件驱动的标本入库台</h1>
+        <span>
+          同场采集归为一个采集事件：登记标本时先选事件，再录采集号与物种；事件地点或海拔更正后，
+          未上柜标本自动同步，已上柜标本标记待复核，无需逐份返工。
+        </span>
+        <div className="hero-actions">
+          <button onClick={exportJSON}>导出备份（JSON）</button>
+          <button onClick={reset}>重置演示数据</button>
+        </div>
+      </header>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[86, 14, 7, 32][index] ?? 12}</strong>
-          </article>
+        <article>
+          <small>入库队列</small>
+          <strong>{metrics.queue}</strong>
+        </article>
+        <article>
+          <small>待鉴定</small>
+          <strong>{metrics.unidentified}</strong>
+        </article>
+        <article>
+          <small>已上柜</small>
+          <strong>{metrics.shelved}</strong>
+        </article>
+        <article>
+          <small>待复核</small>
+          <strong className={metrics.review > 0 ? "warn" : ""}>{metrics.review}</strong>
+        </article>
+        <article>
+          <small>采集事件</small>
+          <strong>{metrics.events}</strong>
+        </article>
+      </section>
+
+      {view.name === "detail" ? (
+        <DetailView
+          db={db}
+          specimenId={view.specimenId}
+          onBack={() => setView({ name: "home" })}
+          onOpen={openDetail}
+          onShelve={(id, pos) => apply(ops.shelveSpecimen(db, id, pos))}
+          onUnshelve={(id) => apply(ops.unshelveSpecimen(db, id))}
+          onResolveReview={(id, action) => apply(ops.resolveReview(db, id, action))}
+          onUpdateSpecimen={(id, patch) => apply(ops.updateSpecimen(db, id, patch))}
+        />
+      ) : (
+        <>
+          <div className="workspace">
+            <RegisterPanel
+              events={db.events}
+              onSubmit={(eventId, newEvent, input) => {
+                const result = ops.registerSpecimen(db, eventId, newEvent, input);
+                const err = apply(result);
+                if (!err && result.specimenId) openDetail(result.specimenId);
+                return err;
+              }}
+            />
+            <EventsPanel
+              db={db}
+              onUpdateEvent={(id, patch) => apply(ops.updateEvent(db, id, patch))}
+              onOpenSpecimen={openDetail}
+            />
+          </div>
+          <QueuePanel db={db} onOpen={openDetail} />
+        </>
+      )}
+
+      <footer className="footer">
+        数据保存在本机浏览器（localStorage），关闭或重开页面后可继续处理；更换设备前请先导出备份。
+      </footer>
+
+      <div className="toasts">
+        {toasts.map((t) => (
+          <div key={t.id} className="toast">
+            {t.text}
+          </div>
         ))}
-      </section>
-
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}筛选</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存草稿</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>历史记录</p>
-            <h2>近期工作台</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
-
-export default App;
